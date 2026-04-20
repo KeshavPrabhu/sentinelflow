@@ -1,0 +1,114 @@
+// jenkins/Jenkinsfile
+pipeline {
+    agent any
+
+    // Poll SCM: Check for changes every 5 minutes
+    triggers {
+        pollSCM('H/5 * * * *')
+    }
+
+    options {
+        // Overall timeout to prevent hanging jobs
+        timeout(time: 20, unit: 'MINUTES')
+        // Keeps the console output clean
+        ansiColor('xterm')
+        // Limit the number of old builds kept to save disk space
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    environment {
+        HEALTH_SCRIPT = "scripts/system_health_check.sh"
+        DEPLOY_SCRIPT = "scripts/deploy.sh"
+        ROLLBACK_SCRIPT = "scripts/rollback.sh"
+        INCIDENT_SCRIPT = "scripts/incident_report.sh"
+        REGISTRY = "localhost:5001"
+        IMAGE_NAME = "sentinelflow"
+        BUILD_TAG = "${env.BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                // Checkout with changelog enabled for visibility
+                checkout scm
+                script {
+                    def commitHash = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
+                    echo "Branch: ${env.BRANCH_NAME}"
+                    echo "Commit: ${commitHash}"
+                }
+            }
+        }
+
+        stage('System Health Gate') {
+            steps {
+                echo "Verifying host health before deployment..."
+                sh "chmod +x ${env.HEALTH_SCRIPT}"
+                script {
+                    // returnStatus: true allows us to handle the exit code manually
+                    def exitCode = sh(script: "./${env.HEALTH_SCRIPT}", returnStatus: true)
+                    if (exitCode == 2) {
+                        error("Health check CRITICAL — Aborting deployment to protect infrastructure.")
+                    } else if (exitCode == 1) {
+                        echo "System warnings detected, but proceeding with deployment."
+                    } else {
+                        echo "System health is GREEN."
+                    }
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                echo "Building image: ${env.REGISTRY}/${env.IMAGE_NAME}:${env.BUILD_TAG}"
+                sh "docker build -t ${env.REGISTRY}/${env.IMAGE_NAME}:${env.BUILD_TAG} app/"
+                // Tagging as latest for the local environment
+                sh "docker tag ${env.REGISTRY}/${env.IMAGE_NAME}:${env.BUILD_TAG} ${env.REGISTRY}/${env.IMAGE_NAME}:jenkins-latest"
+            }
+        }
+
+        stage('Security Scan') {
+            steps {
+                echo "Running security scan with Trivy..."
+                // We use || true so the pipeline doesn't fail, but we capture the report
+                sh "trivy image --severity HIGH,CRITICAL --format json --output scan-report-${env.BUILD_TAG}.json ${env.REGISTRY}/${env.IMAGE_NAME}:${env.BUILD_TAG} || true"
+            }
+        }
+
+        stage('Deploy Staging') {
+            steps {
+                echo "Executing local deployment script..."
+                sh "chmod +x ${env.DEPLOY_SCRIPT}"
+                sh "./${env.DEPLOY_SCRIPT} staging ${env.BUILD_TAG}"
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                echo "Verifying application availability..."
+                retry(3) {
+                    sleep 10
+                    sh "curl -sf http://localhost:5000/health | grep healthy"
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            // Ensure all diagnostic reports are saved regardless of success/failure
+            archiveArtifacts artifacts: "scan-report-*.json, /tmp/health_report_*.txt, logs/deploy_*.log", allowEmptyArchive: true
+        }
+        success {
+            echo "Pipeline ${env.BUILD_TAG} succeeded! SentinelFlow is live."
+        }
+        failure {
+            echo "Deployment failed. Initiating SRE Incident Protocol..."
+            sh "chmod +x ${env.ROLLBACK_SCRIPT} ${env.INCIDENT_SCRIPT}"
+            // Run rollback and generate report
+            sh "./${env.ROLLBACK_SCRIPT} staging"
+            sh "./${env.INCIDENT_SCRIPT}"
+            archiveArtifacts artifacts: 'reports/incident_*.txt', allowEmptyArchive: true
+            echo "Rollback completed. Check incident report for RCA."
+        }
+    }
+}
