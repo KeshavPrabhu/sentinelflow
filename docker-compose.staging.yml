@@ -1,0 +1,32 @@
+
+version: '3.8'
+
+services:
+  app:
+    image: localhost:5001/sentinelflow:${IMAGE_TAG:-latest}
+    container_name: sentinel-app-staging
+    restart: unless-stopped
+    environment:
+      - APP_ENV=staging
+      - APP_VERSION=${IMAGE_TAG:-latest}
+    networks:
+      - frontend_net
+      - backend_net 
+    
+  postgres:
+    image: postgres:15.3-alpine
+    restart: unless-stopped
+    networks:
+      - backend_net
+  
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    networks: 
+      - backend_net
+  
+  nginx:
+    image: nginx:1.25.1.-alpine 
+    restart: unless-stopped
+    networks:
+      - frontend_net

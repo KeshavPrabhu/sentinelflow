@@ -1,0 +1,148 @@
+# .gitlab-ci.yml
+image: docker:24.0.5
+
+variables:
+  # Optimization for Docker-in-Docker
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: ""
+  # Python cache to speed up pip installs
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  # Dynamic image tagging
+  IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+  LATEST_TAG: $CI_REGISTRY_IMAGE:latest
+
+services:
+  - docker:24.0.5-dind
+
+stages:
+  - lint
+  - test
+  - build
+  - scan
+  - deploy-staging
+  - smoke-test
+  - deploy-prod
+
+# --- STAGE 1: LINT (The Cleanliness Gate) ---
+# We check if the code and Dockerfile follow best practices before doing anything else.
+lint-job:
+  stage: lint
+  image: python:3.9-slim
+  script:
+    - pip install flake8
+    - flake8 app/ --max-line-length=120 --exclude=app/__pycache__
+    # Hadolint checks for 'smells' in your Dockerfile (e.g., using :latest, missing labels)
+    - docker run --rm -v $(pwd):/root -w /root hadolint/hadolint hadolint app/Dockerfile
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+
+# --- STAGE 2: TEST (The Logic Gate) ---
+# Runs unit tests with a sidecar PostgreSQL database to simulate a real environment.
+test-job:
+  stage: test
+  image: python:3.9-slim
+  services:
+    - postgres:15.3-alpine
+  variables:
+    POSTGRES_DB: pipelineops_test
+    POSTGRES_USER: testuser
+    POSTGRES_PASSWORD: testpass
+    DATABASE_URL: postgresql://testuser:testpass@postgres/pipelineops_test
+  script:
+    - pip install -r app/requirements.txt
+    - pip install pytest pytest-cov
+    - cd app && pytest tests/ -v --junitxml=../report.xml --cov=. --cov-report=html
+    # ATS-Friendly Skill: Enforcing coverage thresholds
+    - coverage report --fail-under=60
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+    paths:
+      - app/htmlcov/
+    expire_in: 1 week
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/pip
+
+# --- STAGE 3: BUILD (The Artifact Generation) ---
+# Compiles the app into an image and pushes it to GitLab's built-in registry.
+build-job:
+  stage: build
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build --build-arg APP_VERSION=$CI_COMMIT_SHA -t $IMAGE_TAG -t $LATEST_TAG app/
+    - docker push $IMAGE_TAG
+    - docker push $LATEST_TAG
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# --- STAGE 4: SCAN (The Security Gate) ---
+# Uses Trivy to ensure we aren't deploying vulnerabilities.
+scan-job:
+  stage: scan
+  image: 
+    name: aquasec/trivy:0.45.0
+    entrypoint: [""]
+  script:
+    - trivy image --exit-code 0 --severity HIGH --format json --output trivy-report.json $IMAGE_TAG
+    # Hard-fail the pipeline if CRITICAL vulnerabilities are found
+    - trivy image --exit-code 1 --severity CRITICAL $IMAGE_TAG
+  artifacts:
+    when: always
+    paths:
+      - trivy-report.json
+    expire_in: 1 month
+  allow_failure: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# --- STAGE 5: DEPLOY STAGING (The Orchestration) ---
+# Deploys the built image to your local Kind cluster or a remote K8s namespace.
+deploy-staging-job:
+  stage: deploy-staging
+  image: bitnami/kubectl:1.27.5
+  script:
+    - echo "Updating K8s Deployment in pipelineops-staging..."
+    - kubectl set image deployment/sentinel-app app=$IMAGE_TAG -n pipelineops-staging
+    - kubectl rollout status deployment/sentinel-app -n pipelineops-staging --timeout=120s
+  environment:
+    name: staging
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# --- STAGE 6: SMOKE TEST (The Reliability Check) ---
+# Verifies the app is actually responding after deployment.
+smoke-test-job:
+  stage: smoke-test
+  image: curlimages/curl:8.2.1
+  script:
+    - |
+      for i in 1 2 3 4 5; do
+        echo "Health check attempt $i..."
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://sentinel-app-staging:5000/health || echo "000")
+        if [ "$STATUS" = "200" ]; then
+          echo "App is Healthy!"
+          exit 0
+        fi
+        sleep 10
+      done
+      echo "Smoke test failed. Pipeline stopping."
+      exit 1
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# --- STAGE 7: DEPLOY PROD (The Final Gate) ---
+# Only runs after manual approval from an engineer.
+deploy-prod-job:
+  stage: deploy-prod
+  image: bitnami/kubectl:1.27.5
+  script:
+    - kubectl set image deployment/sentinel-app app=$IMAGE_TAG -n pipelineops-prod
+    - kubectl rollout status deployment/sentinel-app -n pipelineops-prod --timeout=120s
+  environment:
+    name: production
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
