@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SentinelFlow | SRE Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0f172a; color: #f8fafc; }
+        .card { background-color: #1e293b; border: 1px solid #334155; }
+        .nav-item:hover { background-color: #334155; }
+        .status-pill { padding: 2px 8px; border-radius: 12px; font-size: 12px; }
+        .status-success { background-color: #059669; }
+        .status-failed { background-color: #dc2626; }
+    </style>
+</head>
+<body>
+    <div class="flex h-screen">
+        <div class="w-64 card p-6 flex flex-col">
+            <h1 class="text-2xl font-bold text-blue-500 mb-8">SentinelFlow</h1>
+            <nav class="space-y-4 flex-1">
+                <a href="#" onclick="showPage('pipeline')" class="nav-item block p-3 rounded transition">Pipeline Status</a>
+                <a href="#" onclick="showPage('health')" class="nav-item block p-3 rounded transition">System Health</a>
+                <a href="#" onclick="showPage('deployments')" class="nav-item block p-3 rounded transition">Deployment History</a>
+            </nav>
+            <div class="text-xs text-slate-500">
+                v{{ version }} | Env: {{ env }}
+            </div>
+        </div>
+
+        <main class="flex-1 p-10 overflow-y-auto">
+            <div id="pipeline-page" class="page-content">
+                <h2 class="text-3xl font-bold mb-6">CI/CD Pipeline Overview</h2>
+                <div class="card p-6 rounded-lg">
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="pb-4">ID</th><th class="pb-4">Status</th><th class="pb-4">Branch</th><th class="pb-4">Timestamp</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pipeline-table"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="health-page" class="page-content hidden">
+                <h2 class="text-3xl font-bold mb-6">System Health Monitor</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6" id="health-grid">
+                    </div>
+            </div>
+
+            <div id="deployments-page" class="page-content hidden">
+                <h2 class="text-3xl font-bold mb-6">Deployment History</h2>
+                <div class="card p-6 rounded-lg">
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="pb-4">Version</th><th class="pb-4">Env</th><th class="pb-4">Status</th><th class="pb-4">By</th>
+                            </tr>
+                        </thead>
+                        <tbody id="deployments-table"></tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        function showPage(pageId) {
+            document.querySelectorAll('.page-content').forEach(p => p.classList.add('hidden'));
+            document.getElementById(pageId + '-page').classList.remove('hidden');
+            if (pageId === 'pipeline') fetchPipelines();
+            if (pageId === 'deployments') fetchDeployments();
+        }
+
+        async function fetchDeployments() {
+            const res = await fetch('/api/deployments');
+            const data = await res.json();
+            const table = document.getElementById('deployments-table');
+            table.innerHTML = data.map(d => `
+                <tr class="border-b border-slate-800">
+                    <td class="py-4 font-mono text-sm">${d.version}</td>
+                    <td class="py-4"><span class="status-pill bg-blue-600">${d.env}</span></td>
+                    <td class="py-4"><span class="status-pill ${d.status === 'success' ? 'status-success' : 'status-failed'}">${d.status}</span></td>
+                    <td class="py-4 text-slate-400">${d.by}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function fetchPipelines() {
+            const res = await fetch('/api/pipeline-runs');
+            const data = await res.json();
+            const table = document.getElementById('pipeline-table');
+            table.innerHTML = data.map(p => `
+                <tr class="border-b border-slate-800">
+                    <td class="py-4">#${p.id}</td>
+                    <td class="py-4"><span class="status-pill ${p.status === 'success' ? 'status-success' : 'status-failed'}">${p.status}</span></td>
+                    <td class="py-4 font-mono">${p.ref}</td>
+                    <td class="py-4 text-slate-400">${new Date(p.created_at).toLocaleString()}</td>
+                </tr>
+            `).join('');
+        }
+
+        // Initialize
+        showPage('pipeline');
+    </script>
+</body>
+</html>

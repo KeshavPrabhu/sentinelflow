@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentinel-service
+  namespace: pipelineops-staging
+spec:
+  type: NodePort
+  selector:
+    app: sentinel-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+      nodePort: 30500

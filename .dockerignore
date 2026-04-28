@@ -1,0 +1,12 @@
+# .dockerignore
+.git
+.gitignore
+.env
+__pycache__
+tests/
+logs/
+reports/
+README.md
+Makefile
+k8s/
+jenkins/

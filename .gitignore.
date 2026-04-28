@@ -1,0 +1,11 @@
+# .gitignore
+.env
+__pycache__/
+*.py[cod]
+*.log
+logs/
+reports/incident_*.txt
+.cache/
+htmlcov/
+.pytest_cache/
+*.swp

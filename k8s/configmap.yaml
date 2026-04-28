@@ -1,0 +1,11 @@
+# k8s/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sentinel-config
+  namespace: pipelineops-staging
+data:
+  APP_NAME: "SentinelFlow-Dashboard"
+  LOG_LEVEL: "INFO"
+  PROMETHEUS_URL: "http://prometheus-service.monitoring:9090"
+  ALERTMANAGER_URL: "http://alertmanager-service.monitoring:9093"
