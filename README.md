@@ -12,7 +12,7 @@
 *(On failure: Automated Rollback + Incident Report Generation)*
 
 ## 🛠 What This Project Demonstrates
-| JD Requirement | Project Implementation | Key File |
+|  Requirement | Project Implementation | Key File |
 | :--- | :--- | :--- |
 | **Linux Administration** | Resource monitoring (CPU/Mem/Disk/DNS) | `scripts/system_health_check.sh` |
 | **CI/CD Orchestration** | Hybrid GitLab CI & Jenkins integration | `.gitlab-ci.yml`, `Jenkinsfile` |
